@@ -82,20 +82,20 @@ _install_prerequisites() (
     cd ${tmp_dir}
 
     echo "Installing elfutils..."
-    dnf install -q -y elfutils-libelf.x86_64 elfutils-libelf-devel.x86_64
+    dnf install -q -y elfutils-libelf elfutils-libelf-devel
 
     rm -rf /lib/modules/${KERNEL_VERSION}
     mkdir -p /lib/modules/${KERNEL_VERSION}/proc
 
     echo "Enabling RHOCP and EUS RPM repos..."
-    dnf config-manager --set-enabled rhocp-${OPENSHIFT_VERSION}-for-rhel-8-x86_64-rpms || true
+    dnf config-manager --set-enabled rhocp-${OPENSHIFT_VERSION}-for-rhel-8-ppc64le-rpms || true
     if ! dnf makecache --releasever=${RHEL_VERSION}; then
-    	dnf config-manager --set-disabled rhocp-${OPENSHIFT_VERSION}-for-rhel-8-x86_64-rpms || true
+    	dnf config-manager --set-disabled rhocp-${OPENSHIFT_VERSION}-for-rhel-8-ppc64le-rpms || true
     fi
 
-    dnf config-manager --set-enabled rhel-8-for-x86_64-baseos-eus-rpms  || true
+    dnf config-manager --set-enabled rhel-8-for-ppc64le-baseos-eus-rpms  || true
     if ! dnf makecache --releasever=${RHEL_VERSION}; then
-    	dnf config-manager --set-disabled rhel-8-for-x86_64-baseos-eus-rpms || true
+    	dnf config-manager --set-disabled rhel-8-for-ppc64le-baseos-eus-rpms || true
     fi
 
     echo "Installing Linux kernel headers..."
@@ -436,6 +436,61 @@ _start_vgpu_topology_daemon() {
     echo "Starting nvidia-topologyd.."
     nvidia-topologyd
 }
+_getV100Count() {
+    v100=`nvidia-smi | grep -i V100 | wc -l`
+}
+_calculateCpuset() {
+    _getV100Count
+    cpuset="0,8"
+    if [ $v100 -eq "0" ] ; then
+        echo "INFO: There are no V100 GPUs detected."
+        gpumemset=
+    elif [ $v100 -eq "1" ] ; then
+        gpumemset=",255"
+    elif [ $v100 -eq "2" ] ; then
+        gpumemset=",254,255"
+    elif [ $v100 -eq "3" ] ; then
+        gpumemset=",253-255"
+    elif [ $v100 -eq "4" ] ; then
+        gpumemset=",252-255"
+    elif [ $v100 -eq "5" ] ; then
+        gpumemset=",251-255"
+    elif [ $v100 -eq "6" ] ; then
+        gpumemset=",250-255"
+    fi
+    targetcpuset=$cpuset$gpumemset
+}
+_isGpuMemReady() {
+    _calculateCpuset
+    CPUSET_DIR=/sys/fs/cgroup/cpuset
+    cpuset_cur=$(cat $CPUSET_DIR/cpuset.mems)
+    if [ "$cpuset_cur" == "$targetcpuset" ]; then
+        echo "SUCCESS: Generated cpuset $cpuset_cur matches target cpuset.mems."
+        return 0
+    else
+        echo "INFO: GPU Memory doesn't match cpuset.mems.  Memory still onlining"
+        echo "cpuset.mems"
+        echo "Current : " $cpuset_cur
+        echo "Expected: " $targetcpuset
+        return 1
+    fi
+}
+_updateCpuset() {
+  CPUSET_DIR=/sys/fs/cgroup/cpuset
+  KUBE_DIR=$CPUSET_DIR/kubepods.slice
+  BURST_DIR=$KUBE_DIR/kubepods-burstable.slice
+  BEST_DIR=$KUBE_DIR/kubepods-besteffort.slice
+
+  while ! _isGpuMemReady
+  do
+  echo "waiting for memory to online"
+  sleep 5
+  done
+  echo "Updating kubepod slices with new memory allocations"
+  [ -d $KUBE_DIR ] && cp $CPUSET_DIR/cpuset.mems $KUBE_DIR/cpuset.mems
+  [ -d $BURST_DIR ] && cp $CPUSET_DIR/cpuset.mems $BURST_DIR/cpuset.mems
+  [ -d $BEST_DIR ] && cp $CPUSET_DIR/cpuset.mems $BEST_DIR/cpuset.mems
+}
 
 init() {
     if [ "${DRIVER_TYPE}" = "vgpu" ]; then
@@ -480,6 +535,9 @@ init() {
     _load_driver
     _mount_rootfs
     _write_kernel_update_hook
+
+    echo "Waiting on cpuset to complete"
+    _updateCpuset
 
     echo "Done, now waiting for signal"
     sleep infinity &

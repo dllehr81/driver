@@ -3,7 +3,7 @@ FROM nvidia/cuda:11.4.1-base-ubi8 as build
 RUN dnf install -y git wget
 
 ENV GOLANG_VERSION 1.15.5
-RUN wget -nv -O - https://storage.googleapis.com/golang/go${GOLANG_VERSION}.linux-amd64.tar.gz \
+RUN wget -nv -O - https://storage.googleapis.com/golang/go${GOLANG_VERSION}.linux-ppc64le.tar.gz \
     | tar -C /usr/local -xz
 ENV PATH /usr/local/go/bin:$PATH
 
@@ -43,7 +43,7 @@ RUN sh /tmp/install.sh depinstall && \
     ln -s /sbin/ldconfig /sbin/ldconfig.real
 
 # Install K8s client to fetch node resources, cluster version etc
-RUN curl -o /usr/bin/kubectl -L "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl";
+RUN curl -o /usr/bin/kubectl -L "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/ppc64le/kubectl";
 RUN chmod a+x /usr/bin/kubectl
 
 ADD drivers drivers/
@@ -52,9 +52,9 @@ ADD drivers drivers/
 RUN if [ "$DRIVER_TYPE" != "vgpu" ]; then \
     cd drivers && \
     curl -fSsl -O $BASE_URL/$DRIVER_VERSION/NVIDIA-Linux-$DRIVER_ARCH-$DRIVER_VERSION.run && \
-    chmod +x  NVIDIA-Linux-$DRIVER_ARCH-$DRIVER_VERSION.run && \
-    dnf install -y nvidia-fabricmanager-${DRIVER_BRANCH}-${DRIVER_VERSION}-1 \
-        libnvidia-nscq-${DRIVER_BRANCH}-${DRIVER_VERSION}-1; fi
+    chmod +x  NVIDIA-Linux-$DRIVER_ARCH-$DRIVER_VERSION.run; fi
+#    dnf install -y nvidia-fabricmanager-${DRIVER_BRANCH}-${DRIVER_VERSION}-1 \
+#        libnvidia-nscq-${DRIVER_BRANCH}-${DRIVER_VERSION}-1; fi
 
 COPY nvidia-driver /usr/local/bin
 
